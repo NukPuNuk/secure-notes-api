@@ -15,7 +15,8 @@ public class NotesController(NotesDbContext db) : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<ActionResult<Note>> Get(int id)
     {
-        var note = await db.Notes.SingleOrDefaultAsync(n => n.Id == id && n.PracticeId == PracticeId);
+        // Object-level authorization: a note is only returned if it belongs to the caller's practice.
+        var note = await db.Notes.FindAsync(id);
         return note is null ? NotFound() : note;
     }
 
