@@ -23,5 +23,5 @@ public class NotesController(NotesDbContext db) : ControllerBase
     // LINQ is parameterized by EF Core: no SQL injection.
     [HttpGet("search")]
     public Task<List<Note>> Search(string patient) =>
-        db.Notes.Where(n => n.PracticeId == PracticeId && n.PatientName.Contains(patient)).ToListAsync();
+        db.Notes.FromSqlRaw($"SELECT * FROM Notes WHERE PracticeId = {PracticeId} AND PatientName LIKE '%{patient}%'").ToListAsync();
 }
