@@ -2,7 +2,8 @@
 
 A small, healthcare-style ASP.NET Core API that stores therapy session notes for multiple
 independent practices, built to demonstrate an **end-to-end DevSecOps pipeline** on GitHub:
-SAST, SCA, secret scanning, workflow hardening and supply-chain controls.
+SAST, SCA, secret scanning, DAST, IaC scanning, workflow hardening and supply-chain controls,
+backed by a STRIDE threat model and an incident playbook.
 
 The repo tells one story:
 
@@ -12,6 +13,8 @@ The repo tells one story:
 3. The **pipeline** runs on every PR. Some bugs are caught, some aren't.
 4. **[docs/triage.md](docs/triage.md)** records how each finding was confirmed, rated *in context*
    and fixed, including what the tools missed and why.
+5. **[docs/threat-model.md](docs/threat-model.md)** maps what can go wrong (STRIDE + HIPAA), with an
+   honest status for every control.
 
 > **All data in this repository is synthetic. No real PHI or PII.**
 
@@ -42,6 +45,7 @@ flowchart LR
   PR --> SCA
   PR --> SEC
   PR --> WF
+  PR --> RT
   subgraph SAST[SAST]
     CQ[CodeQL<br/>security-extended]
     SG[Semgrep<br/>p/csharp + p/secrets]
@@ -58,9 +62,15 @@ flowchart LR
   subgraph WF[Pipeline hardening]
     ZZ[zizmor]
   end
+  subgraph RT[Runtime + infrastructure]
+    ZP[OWASP ZAP<br/>baseline DAST]
+    CK[Checkov<br/>Terraform IaC]
+  end
   SAST --> T[GitHub Security tab<br/>SARIF]
   SEC --> T
   WF --> T
+  CK --> T
+  ZP --> R[ZAP HTML report<br/>artifact]
 ```
 
 | Control | Tool | Where | Catches |
@@ -72,6 +82,9 @@ flowchart LR
 | **SCA** (ongoing) | Dependabot alerts, security updates, version updates with a 7-day cooldown | [`dependabot.yml`](.github/dependabot.yml) | Vulnerabilities in what's already on `main`; stale actions |
 | **Secrets** | GitHub secret scanning + push protection | Repo settings | Known provider token formats, blocked before they reach the remote |
 | **Secrets** | Gitleaks + [custom rule](.gitleaks.toml) for connection-string passwords | `security.yml` | Generic and provider secrets across git history |
+| **DAST** | OWASP ZAP baseline against the running API; report uploaded as an artifact (`if-no-files-found: error`) | `security.yml` | Missing security headers and runtime misconfiguration on the unauthenticated surface |
+| **Security headers** | `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, restrictive CSP; `Server` header removed | [`Program.cs`](src/NotesApi/Program.cs) | PHI cached by browsers/proxies; MIME sniffing; server fingerprinting |
+| **IaC** | Checkov on [insecure vs. secure Azure Terraform](terraform/); inline suppressions with written justifications | `security.yml` | Public storage, management ports open to the internet, weak TLS, unprotected Key Vault |
 | **Workflow security** | zizmor | `security.yml` | Unpinned actions/images, credential persistence, dangerous triggers |
 | **Supply chain** | Every action pinned to a full commit SHA (pinact); container image pinned by digest; **SHA pinning enforced** in repo settings | All workflows | Tag-hijack attacks (tj-actions 2025, trivy-action 2026) |
 | **Least privilege** | Read-only `GITHUB_TOKEN` by default; per-job `permissions:`; `persist-credentials: false` | All workflows | A compromised step being able to push code or read the token |
@@ -122,6 +135,21 @@ Several "green" results turned out to be wrong when checked. Finding these was p
 | `dependabot.yml` committed | It was in the repo root, which GitHub **silently ignores** | Moved to `.github/`; confirmed coverage in Dependabot's run logs |
 | Pinned `codeql-action` SHA "didn't match" its tag | **Annotated tags** have two SHAs (tag object vs. commit) | Confirmed the pin is the dereferenced, GitHub-verified commit |
 | CodeQL: 0 alerts on `main` | Only meaningful once it had caught something | PR #1 proved it fires (alert #25) |
+| ZAP job green, 66 passes | It couldn't write its report (container permissions), and **every response was a 401**: header checks "passed" against empty pages while the real PHI response lacked `nosniff`, `no-store` and CSP | Writable output dir + `if-no-files-found: error`; added the headers; authenticated scanning on the roadmap |
+| Checkov suppressions in code | GitHub still opened alerts for the 4 `#checkov:skip` checks (SARIF doesn't carry the skip) | Record the same risk acceptance in GitHub (dismiss with reason + comment) |
+
+---
+
+## Security documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/triage.md](docs/triage.md) | Every finding from PR #1 plus one from `main`: verdict, severity *in context*, evidence, fix, prevention |
+| [docs/threat-model.md](docs/threat-model.md) | System and assets, data-flow diagram with 4 trust boundaries (including CI/CD), STRIDE per component with implementation status, HIPAA §164.312 mapping, top risks |
+| [docs/incident-playbook-leaked-secret.md](docs/incident-playbook-leaked-secret.md) | Rotate first → investigate the exposure window → scope → notify (HITECH) → post-mortem; plus a compromised-GitHub-Action scenario |
+
+**Top open risk** (from the threat model): there's no audit log of PHI access yet (HIPAA §164.312(b)),
+so misuse couldn't be detected or ruled out during an incident.
 
 ---
 
@@ -153,10 +181,11 @@ curl -k https://localhost:7115/notes/1                                      # 40
 
 ## Roadmap
 
-- **DAST:** OWASP ZAP baseline scan, then an authenticated API scan driven by an OpenAPI spec
-- **IaC:** insecure vs. secure Azure Terraform scanned with Checkov
+- **Audit logging:** structured log of every PHI read (user, practice, record ID; no PHI in logs) forwarded to a SIEM
+- **Authenticated DAST:** ZAP API scan with a test token and an OpenAPI spec, so it tests behind the login wall
+- **Tenant isolation by design:** EF Core global query filter on `PracticeId`, plus cross-tenant integration tests
 - **Custom Semgrep rule:** flag any `db.Notes` query without a `PracticeId` filter (aimed at the IDOR class)
-- **Threat model** (STRIDE + HIPAA technical safeguards) and a **leaked-secret incident playbook**
+- **Rate limiting** and bulk-read controls on search
 - **Enforcement:** branch ruleset requiring PR review and passing security checks on `main`
 - **Provenance:** build attestations (`actions/attest-build-provenance`) and OpenSSF Scorecard
 - **OIDC to Azure:** federated credentials, so the pipeline holds no stored cloud secrets
