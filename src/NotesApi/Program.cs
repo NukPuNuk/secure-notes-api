@@ -14,7 +14,17 @@ builder.Services.AddAuthorization(o =>
 
 builder.Services.AddControllers();
 
+builder.WebHost.ConfigureKestrel(o => o.AddServerHeader = false);
+
 var app = builder.Build();
+
+app.Use(async (ctx, next) =>
+{
+    ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    ctx.Response.Headers["Cache-Control"] = "no-store";
+    ctx.Response.Headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'";
+    await next();
+});
 
 using (var scope = app.Services.CreateScope())
     scope.ServiceProvider.GetRequiredService<NotesDbContext>().Database.EnsureCreated();
