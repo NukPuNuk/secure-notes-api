@@ -1,0 +1,25 @@
+# Gitleaks configuration for secure-notes-api.
+#
+# Why this file exists: in Phase 5.4 a hardcoded SQL Server password
+# (inside a connection string) passed every default secret
+# scanner: GitHub push protection, GitHub secret scanning, Gitleaks' built-in
+# rules and Semgrep p/secrets. Human-style passwords don't match provider token
+# formats and fall under generic entropy thresholds. This rule closes that gap.
+
+title = "secure-notes-api gitleaks config"
+
+# Keep all of Gitleaks' built-in rules; only add to them.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "connection-string-password"
+description = "Password embedded in a database connection string (ADO.NET / ODBC style)"
+# Matches a "password" or "pwd" key, then an equals sign, then a value of 4+ chars.
+# The key must start the string or follow a ; " ' or whitespace, so it won't fire
+# on longer words like "OldPassword". The value stops at ; " ' or whitespace.
+# Capture group 1 is the secret itself.
+regex = '''(?i)(?:^|[;"'\s])(?:password|pwd)\s*=\s*([^;"'\s]{4,})'''
+secretGroup = 1
+# Pre-filter: Gitleaks only runs the regex on content containing one of these.
+keywords = ["password", "pwd"]
